@@ -20,7 +20,7 @@ run: install
 deploy:
 	git add -A
 	git commit -m "deploy" || true
-	ggpush
+	git push
 	ssh $(PI_HOST) 'cd $(PI_DIR) && git pull'
 
 # Copy .env to Pi (one-time, not in git)
