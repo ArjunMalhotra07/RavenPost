@@ -113,19 +113,24 @@ def _check_capt_error(job_id: str) -> bool:
     return False
 
 
-def _cancel_all():
-    """Cancel all jobs for our printer. Used for post-print cleanup since CAPT
-    leaves ghost jobs in the queue even after successful prints."""
+def _reset_cups():
+    """Full CUPS restart + cleanup. The Canon CAPT driver corrupts its USB state
+    after each print. Only a full CUPS restart re-initializes the driver properly.
+
+    Requires passwordless sudo for: /bin/systemctl restart cups
+    """
     try:
-        result = _run(["cancel", "-a", PRINTER_NAME])
-        log.info("cancel -a %s: rc=%d stderr=%s", PRINTER_NAME, result.returncode, result.stderr.strip())
+        result = _run(["sudo", "systemctl", "restart", "cups"], timeout=30)
+        log.info("cups restart: rc=%d stderr=%s", result.returncode, result.stderr.strip())
     except subprocess.TimeoutExpired:
-        log.warning("cancel -a %s timed out", PRINTER_NAME)
+        log.warning("cups restart timed out")
 
+    # After restart, cancel any leftover jobs and ensure printer is enabled
+    import time
+    time.sleep(3)
 
-def _recover_printer():
-    """Re-enable the printer and make it accept jobs after a stuck job."""
     for cmd_name, cmd in [
+        ("cancel -a", ["cancel", "-a", PRINTER_NAME]),
         ("cupsenable", ["cupsenable", PRINTER_NAME]),
         ("cupsaccept", ["cupsaccept", PRINTER_NAME]),
     ]:
@@ -249,16 +254,10 @@ async def submit_and_monitor(
         return False, "Printer is busy with another job. Please wait and try again."
 
     async with _print_lock:
-        # 0. Pre-print cleanup — the CAPT driver gets into a bad state after
-        #    each successful print. Clearing ghost jobs and re-enabling the
-        #    printer before every submission ensures each print is "the first
-        #    print after recovery."
-        # Pre-print: cancel ghost jobs, re-enable printer, then wait for the
-        # CAPT driver to fully release the USB handle before submitting.
-        log.info("Pre-print cleanup: cancel -a + cupsenable + cupsaccept + 10s cooldown")
-        await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
-        await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
-        await asyncio.sleep(10)
+        # 0. Pre-print: full CUPS restart to reset the CAPT driver's USB state.
+        #    Without this, every second print produces a blank page.
+        log.info("Pre-print: restarting CUPS to reset CAPT driver")
+        await asyncio.get_event_loop().run_in_executor(None, _reset_cups)
 
         # 1. Submit
         ok, job_id = await asyncio.get_event_loop().run_in_executor(
@@ -325,14 +324,10 @@ async def submit_and_monitor(
                 if saw_printing:
                     # Was printing, now idle → done
                     log.info("Job %s completed (printer idle) after %ds", job_id, elapsed)
-                    await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
-                    await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
                     return True, f"Print completed ({job_id})"
                 elif elapsed >= phase_a_limit:
                     # Printer never left idle — job went through very fast
                     log.info("Job %s: printer stayed idle for %ds, assuming completed", job_id, elapsed)
-                    await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
-                    await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
                     return True, f"Print completed ({job_id})"
 
             if state == "disabled":
@@ -340,14 +335,12 @@ async def submit_and_monitor(
                 break
 
         # 3. Timeout, stuck, or disabled — recover
-        log.warning("Job %s stuck after %ds, cancelling and recovering", job_id, elapsed)
+        log.warning("Job %s stuck after %ds, recovering", job_id, elapsed)
 
-        await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
-        await asyncio.sleep(2)
-        await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
+        await asyncio.get_event_loop().run_in_executor(None, _reset_cups)
 
         return False, (
-            f"Print job {job_id} appeared stuck and was cancelled after {JOB_TIMEOUT}s. "
+            f"Print job {job_id} appeared stuck and was cancelled after {elapsed}s. "
             f"Printer has been reset and is ready for the next job."
         )
 
