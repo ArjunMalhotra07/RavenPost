@@ -125,9 +125,10 @@ def _reset_cups():
     except subprocess.TimeoutExpired:
         log.warning("cups restart timed out")
 
-    # After restart, cancel any leftover jobs and ensure printer is enabled
+    # Wait for CUPS to fully initialize and the CAPT driver to re-enumerate USB.
+    # Manual testing showed ~8-11s needed between restart and successful print.
     import time
-    time.sleep(3)
+    time.sleep(7)
 
     for cmd_name, cmd in [
         ("cancel -a", ["cancel", "-a", PRINTER_NAME]),
@@ -139,6 +140,9 @@ def _reset_cups():
             log.info("%s %s: rc=%d stderr=%s", cmd_name, PRINTER_NAME, result.returncode, result.stderr.strip())
         except subprocess.TimeoutExpired:
             log.warning("%s %s timed out", cmd_name, PRINTER_NAME)
+
+    # Extra settle time after re-enabling
+    time.sleep(4)
 
 
 # ---------------------------------------------------------------------------
