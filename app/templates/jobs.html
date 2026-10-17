@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Print Jobs</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5; color: #1a1a2e;
+        }
+        nav {
+            background: #1a1a2e; color: #fff; padding: 0.8rem 1.5rem;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        nav a { color: #cbd5e1; text-decoration: none; margin-left: 1.2rem; font-size: 0.9rem; }
+        nav a:hover { color: #fff; }
+        .container { max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+        .card {
+            background: #fff; border-radius: 12px; padding: 2rem;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        h2 { font-size: 1.3rem; margin-bottom: 1rem; }
+        .status { font-size: 0.85rem; color: #666; margin-bottom: 1.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 2px solid #e0e0e0; color: #555; font-weight: 600; }
+        td { padding: 0.55rem 0.5rem; border-bottom: 1px solid #f0f0f0; }
+        tr:hover td { background: #f8f9fa; }
+        .empty { text-align: center; color: #999; padding: 2rem; }
+    </style>
+</head>
+<body>
+    <nav>
+        <strong>&#128424; Print Server</strong>
+        <div>
+            <a href="/">Print</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/logout">Logout</a>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="card">
+            <h2>Print Jobs</h2>
+            <div class="status">Printer: {{ printer_status }}</div>
+            {% if jobs %}
+            <table>
+                <thead>
+                    <tr><th>Job ID</th><th>User</th><th>Size</th><th>Date</th></tr>
+                </thead>
+                <tbody>
+                    {% for job in jobs %}
+                    <tr>
+                        <td>{{ job.id }}</td>
+                        <td>{{ job.user }}</td>
+                        <td>{{ job.size }}</td>
+                        <td>{{ job.date }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="empty">No print jobs found.</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

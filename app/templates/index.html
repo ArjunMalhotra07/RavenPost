@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Print Server</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5; color: #1a1a2e;
+        }
+        nav {
+            background: #1a1a2e; color: #fff; padding: 0.8rem 1.5rem;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        nav a { color: #cbd5e1; text-decoration: none; margin-left: 1.2rem; font-size: 0.9rem; }
+        nav a:hover { color: #fff; }
+        .container { max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+        .card {
+            background: #fff; border-radius: 12px; padding: 2rem;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 1.5rem;
+        }
+        h2 { font-size: 1.3rem; margin-bottom: 1rem; }
+        .status { font-size: 0.85rem; color: #666; margin-bottom: 1.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
+        label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.3rem; color: #444; }
+        input[type="file"], input[type="number"], input[type="text"], select {
+            width: 100%; padding: 0.55rem 0.8rem; border: 1px solid #d0d0d0;
+            border-radius: 6px; font-size: 0.95rem; margin-bottom: 1rem; background: #fff;
+        }
+        input:focus, select:focus { outline: none; border-color: #4a6cf7; box-shadow: 0 0 0 3px rgba(74,108,247,0.15); }
+        .row { display: flex; gap: 1rem; }
+        .row > div { flex: 1; }
+        .btn-print {
+            width: 100%; padding: 0.7rem; background: #4a6cf7; color: #fff;
+            border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer;
+            display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+        }
+        .btn-print:hover { background: #3b5de7; }
+        .btn-print:disabled { background: #94a3b8; cursor: not-allowed; }
+        .spinner {
+            display: none;
+            width: 18px; height: 18px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+        .btn-print.loading .spinner { display: inline-block; }
+        .btn-print.loading .btn-label { display: none; }
+        .btn-print.loading .btn-loading-label { display: inline; }
+        .btn-loading-label { display: none; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .alert {
+            padding: 0.8rem 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.95rem;
+        }
+        .alert-success { background: #d4edda; color: #155724; }
+        .alert-error { background: #f8d7da; color: #721c24; }
+        .alert-warn { background: #fff3cd; color: #856404; }
+        .hint { font-size: 0.8rem; color: #888; margin-top: -0.7rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <nav>
+        <strong>&#128424; Print Server</strong>
+        <div>
+            <a href="/">Print</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/logout">Logout</a>
+        </div>
+    </nav>
+    <div class="container">
+        {% if printer_busy %}
+        <div class="alert alert-warn">
+            Printer is currently processing a job. Please wait before submitting another.
+        </div>
+        {% endif %}
+
+        {% if result %}
+        <div class="alert {{ 'alert-success' if result.success else 'alert-error' }}">
+            {{ result.message }}
+        </div>
+        {% endif %}
+
+        <div class="card">
+            <h2>Print a PDF</h2>
+            <div class="status">Printer: {{ printer_status }}</div>
+            <form id="printForm" method="post" action="/print" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                <label for="file">PDF File</label>
+                <input type="file" id="file" name="file" accept=".pdf,application/pdf" required>
+                <p class="hint">Max {{ max_upload_mb }} MB</p>
+
+                <div class="row">
+                    <div>
+                        <label for="copies">Copies</label>
+                        <input type="number" id="copies" name="copies" value="1" min="1" max="99">
+                    </div>
+                    <div>
+                        <label for="page_range">Page Range</label>
+                        <input type="text" id="page_range" name="page_range" placeholder="e.g. 1-3,5">
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div>
+                        <label for="number_up">Pages per Sheet</label>
+                        <select id="number_up" name="number_up">
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                            <option value="4">4</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="orientation">Orientation</label>
+                        <select id="orientation" name="orientation">
+                            <option value="portrait" selected>Portrait</option>
+                            <option value="landscape">Landscape</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div>
+                        <label for="scaling">Scaling</label>
+                        <select id="scaling" name="scaling" onchange="document.getElementById('customScaleRow').style.display = this.value === 'custom' ? 'flex' : 'none'">
+                            <option value="fit-printable" selected>Fit to Printable Area</option>
+                            <option value="fit-paper">Fit to Paper</option>
+                            <option value="custom">Custom %</option>
+                            <option value="default">No Scaling</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="paper_size">Paper Size</label>
+                        <select id="paper_size" name="paper_size">
+                            <option value="A4" selected>A4</option>
+                            <option value="Letter">Letter</option>
+                            <option value="Legal">Legal</option>
+                            <option value="A3">A3</option>
+                            <option value="A5">A5</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row" id="customScaleRow" style="display: none;">
+                    <div>
+                        <label for="scale_percent">Scale %</label>
+                        <input type="number" id="scale_percent" name="scale_percent" value="100" min="1" max="999" placeholder="e.g. 80">
+                        <p class="hint">100 = actual size, 80 = shrink 20%, 120 = enlarge 20%</p>
+                    </div>
+                    <div></div>
+                </div>
+
+                <div class="row">
+                    <div>
+                        <label for="margins">Margins</label>
+                        <select id="margins" name="margins">
+                            <option value="default" selected>Default</option>
+                            <option value="small">Small (5mm)</option>
+                            <option value="medium">Medium (10mm)</option>
+                            <option value="large">Large (15mm)</option>
+                            <option value="none">None (borderless)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="sides">Sides</label>
+                        <select id="sides" name="sides">
+                            <option value="one-sided" selected>One-sided</option>
+                            <option value="two-sided-long-edge">Double-sided (long edge)</option>
+                            <option value="two-sided-short-edge">Double-sided (short edge)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-print" id="printBtn" {% if printer_busy %}disabled{% endif %}>
+                    <span class="btn-label">&#128424; Print</span>
+                    <span class="spinner"></span>
+                    <span class="btn-loading-label">Sending &amp; waiting for printer...</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('printForm').addEventListener('submit', function() {
+            var btn = document.getElementById('printBtn');
+            btn.classList.add('loading');
+            btn.disabled = true;
+        });
+    </script>
+</body>
+</html>

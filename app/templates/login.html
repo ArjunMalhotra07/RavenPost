@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Print Server — Login</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5;
+            display: flex; align-items: center; justify-content: center;
+            min-height: 100vh;
+        }
+        .card {
+            background: #fff; border-radius: 12px; padding: 2.5rem;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08); width: 100%; max-width: 380px;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 1.5rem; text-align: center; color: #1a1a2e; }
+        label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.3rem; color: #444; }
+        input[type="text"], input[type="password"] {
+            width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #d0d0d0;
+            border-radius: 6px; font-size: 1rem; margin-bottom: 1rem;
+        }
+        input:focus { outline: none; border-color: #4a6cf7; box-shadow: 0 0 0 3px rgba(74,108,247,0.15); }
+        button {
+            width: 100%; padding: 0.7rem; background: #4a6cf7; color: #fff;
+            border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer;
+        }
+        button:hover { background: #3b5de7; }
+        .error { background: #fee; color: #c0392b; padding: 0.6rem; border-radius: 6px; margin-bottom: 1rem; text-align: center; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>&#128424; Print Server</h1>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/login">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required>
+            <button type="submit">Log in</button>
+        </form>
+    </div>
+</body>
+</html>
