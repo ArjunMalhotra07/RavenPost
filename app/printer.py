@@ -328,10 +328,17 @@ async def submit_and_monitor(
                 if saw_printing:
                     # Was printing, now idle → done
                     log.info("Job %s completed (printer idle) after %ds", job_id, elapsed)
+                    # Let the printer hardware fully settle before releasing
+                    # the lock. Without this, a quick follow-up print finds
+                    # the CAPT driver still in a corrupted USB state.
+                    log.info("Post-print cooldown: 15s for printer hardware to settle")
+                    await asyncio.sleep(15)
                     return True, f"Print completed ({job_id})"
                 elif elapsed >= phase_a_limit:
                     # Printer never left idle — job went through very fast
                     log.info("Job %s: printer stayed idle for %ds, assuming completed", job_id, elapsed)
+                    log.info("Post-print cooldown: 15s for printer hardware to settle")
+                    await asyncio.sleep(15)
                     return True, f"Print completed ({job_id})"
 
             if state == "disabled":
