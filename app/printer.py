@@ -249,6 +249,15 @@ async def submit_and_monitor(
         return False, "Printer is busy with another job. Please wait and try again."
 
     async with _print_lock:
+        # 0. Pre-print cleanup — the CAPT driver gets into a bad state after
+        #    each successful print. Clearing ghost jobs and re-enabling the
+        #    printer before every submission ensures each print is "the first
+        #    print after recovery."
+        log.info("Pre-print cleanup: cancel -a + cupsenable + cupsaccept")
+        await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
+        await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
+        await asyncio.sleep(1)
+
         # 1. Submit
         ok, job_id = await asyncio.get_event_loop().run_in_executor(
             None,
