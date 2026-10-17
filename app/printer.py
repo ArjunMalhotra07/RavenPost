@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from app.config import PRINTER_NAME, UPLOAD_DIR, JOB_TIMEOUT, JOB_POLL_INTERVAL
+from app.config import PRINTER_NAME, UPLOAD_DIR, JOB_TIMEOUT, JOB_POLL_INTERVAL, JOB_STUCK_PRINTING
 
 log = logging.getLogger("print-server")
 
@@ -282,6 +282,7 @@ async def submit_and_monitor(
 
         elapsed = 0
         saw_printing = False
+        printing_for = 0         # seconds spent in "printing" state
         phase_a_limit = 15       # seconds to wait for printing to start
 
         while elapsed < JOB_TIMEOUT:
@@ -291,21 +292,21 @@ async def submit_and_monitor(
             state = await asyncio.get_event_loop().run_in_executor(
                 None, _get_printer_state,
             )
-            log.info("Job %s poll: state=%s elapsed=%ds saw_printing=%s",
-                     job_id, state, elapsed, saw_printing)
+            log.info("Job %s poll: state=%s elapsed=%ds printing_for=%ds",
+                     job_id, state, elapsed, printing_for)
 
             if state == "printing":
                 saw_printing = True
+                printing_for += JOB_POLL_INTERVAL
 
-                # Check CUPS error log for CAPT crash signatures.
-                # This catches stuck jobs fast regardless of PDF size —
-                # a 100-page PDF legitimately in "printing" won't have
-                # these errors, but a stuck CAPT driver will.
-                has_error = await asyncio.get_event_loop().run_in_executor(
-                    None, _check_capt_error, job_id,
-                )
-                if has_error:
-                    log.warning("Job %s: CAPT error detected, recovering", job_id)
+                # CAPT silently hangs with no error log when stuck.
+                # The "printing" state = CUPS sending data over USB.
+                # Even large PDFs transfer in under 30s. If still
+                # "printing" after JOB_STUCK_PRINTING (default 45s),
+                # the driver is hung.
+                if printing_for >= JOB_STUCK_PRINTING:
+                    log.warning("Job %s stuck in printing for %ds, recovering",
+                                job_id, printing_for)
                     break
                 continue
 
