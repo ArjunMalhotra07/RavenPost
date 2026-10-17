@@ -1,8 +1,7 @@
 # Print Server Makefile
-# Update PI_HOST to match your Raspberry Pi's IP or hostname
 
 PI_HOST = arjun-malhotra@192.168.1.20
-PI_DIR  = ~/programs/wifi_printer
+PI_DIR  = ~/programs/RavenPost
 
 # --- Local ---
 
@@ -15,15 +14,22 @@ install: venv
 run: install
 	. venv/bin/activate && python -m app.main
 
-# --- Deploy to Pi ---
+# --- Deploy to Pi (git-based) ---
 
+# Commit all changes, push, and pull on Pi
 deploy:
-	scp -r app/ requirements.txt .env Makefile $(PI_HOST):$(PI_DIR)/
-	ssh $(PI_HOST) 'mkdir -p $(PI_DIR)/uploads'
+	git add -A
+	git commit -m "deploy" || true
+	git push
+	ssh $(PI_HOST) 'cd $(PI_DIR) && git pull'
 
-# Full setup on Pi (run once after first deploy)
+# Copy .env to Pi (one-time, not in git)
+deploy-env:
+	scp .env $(PI_HOST):$(PI_DIR)/.env
+
+# Full setup on Pi (run once after first clone)
 pi-setup:
-	ssh $(PI_HOST) 'cd $(PI_DIR) && python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt'
+	ssh $(PI_HOST) 'cd $(PI_DIR) && python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt && mkdir -p uploads'
 
 # Start the server on the Pi
 pi-run:
@@ -33,6 +39,10 @@ pi-run:
 pi-service:
 	scp print-server.service $(PI_HOST):/tmp/print-server.service
 	ssh $(PI_HOST) 'sudo cp /tmp/print-server.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable print-server && sudo systemctl restart print-server'
+
+# Restart the service on Pi after a deploy
+pi-restart:
+	ssh $(PI_HOST) 'sudo systemctl restart print-server'
 
 # Check service status on the Pi
 pi-status:
@@ -52,4 +62,4 @@ tunnel:
 hash:
 	@python3 -c "import bcrypt; print(bcrypt.hashpw('$(PASS)'.encode(), bcrypt.gensalt()).decode())"
 
-.PHONY: install run deploy pi-setup pi-run pi-service pi-status pi-logs tunnel hash
+.PHONY: install run deploy deploy-env pi-setup pi-run pi-service pi-restart pi-status pi-logs tunnel hash
