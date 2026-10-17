@@ -40,3 +40,8 @@ JOB_TIMEOUT: int = int(os.getenv("JOB_TIMEOUT", "90"))
 
 # How often to poll lpstat while waiting for a job to complete (seconds)
 JOB_POLL_INTERVAL: int = int(os.getenv("JOB_POLL_INTERVAL", "3"))
+
+# If the printer stays in "printing" state longer than this, assume stuck (seconds)
+# Set this a bit above your longest normal print time. A normal single-page PDF
+# takes ~20s on the LBP2900, so 45s is generous.
+JOB_STUCK_PRINTING: int = int(os.getenv("JOB_STUCK_PRINTING", "45"))

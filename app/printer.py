@@ -61,7 +61,7 @@ def _run(cmd, timeout=15):
 
 
 def _get_printer_state():
-    """Return the printer state as a string: 'idle', 'printing', or 'unknown'.
+    """Return the printer state as a string: 'idle', 'printing', 'error', 'disabled', or 'unknown'.
 
     lpstat -p output examples:
       "printer LBP2900 is idle.  enabled since ..."
@@ -71,7 +71,6 @@ def _get_printer_state():
     try:
         result = _run(["lpstat", "-p", PRINTER_NAME])
         output = result.stdout.lower()
-        log.debug("lpstat -p: %s", output.strip())
         if "now printing" in output:
             return "printing"
         if "idle" in output:
@@ -81,6 +80,37 @@ def _get_printer_state():
         return "unknown"
     except subprocess.TimeoutExpired:
         return "unknown"
+
+
+def _check_capt_error(job_id: str) -> bool:
+    """Check if the CUPS error log contains CAPT failure messages for this job.
+
+    Looks for known CAPT crash signatures:
+      - "Unable to send data to printer"
+      - "CAPT: bad reply from printer"
+      - "Backend usb returned status 1"
+
+    Only checks the last 50 lines to avoid false positives from old errors.
+    """
+    # Extract the numeric job number from e.g. "LBP2900-36"
+    job_num = job_id.rsplit("-", 1)[-1] if "-" in job_id else ""
+    try:
+        result = _run(["tail", "-50", "/var/log/cups/error_log"])
+        for line in result.stdout.splitlines():
+            # Only match lines about this specific job
+            if job_num and f"[Job {job_num}]" not in line:
+                continue
+            lower = line.lower()
+            if any(sig in lower for sig in (
+                "unable to send data to printer",
+                "bad reply from printer",
+                "backend usb returned status",
+            )):
+                log.warning("CAPT error detected for job %s: %s", job_id, line.strip())
+                return True
+    except subprocess.TimeoutExpired:
+        pass
+    return False
 
 
 def _cancel_all():
@@ -252,7 +282,7 @@ async def submit_and_monitor(
 
         elapsed = 0
         saw_printing = False
-        phase_a_limit = 15  # seconds to wait for printing to start
+        phase_a_limit = 15       # seconds to wait for printing to start
 
         while elapsed < JOB_TIMEOUT:
             await asyncio.sleep(JOB_POLL_INTERVAL)
@@ -266,7 +296,18 @@ async def submit_and_monitor(
 
             if state == "printing":
                 saw_printing = True
-                continue  # still working, keep waiting
+
+                # Check CUPS error log for CAPT crash signatures.
+                # This catches stuck jobs fast regardless of PDF size —
+                # a 100-page PDF legitimately in "printing" won't have
+                # these errors, but a stuck CAPT driver will.
+                has_error = await asyncio.get_event_loop().run_in_executor(
+                    None, _check_capt_error, job_id,
+                )
+                if has_error:
+                    log.warning("Job %s: CAPT error detected, recovering", job_id)
+                    break
+                continue
 
             if state == "idle":
                 if saw_printing:
@@ -276,21 +317,18 @@ async def submit_and_monitor(
                     await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
                     return True, f"Print completed ({job_id})"
                 elif elapsed >= phase_a_limit:
-                    # Printer never left idle — job likely went through very fast
-                    # or was consumed instantly. Treat as success.
+                    # Printer never left idle — job went through very fast
                     log.info("Job %s: printer stayed idle for %ds, assuming completed", job_id, elapsed)
                     await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
                     await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
                     return True, f"Print completed ({job_id})"
-                # else: still in phase A, printer hasn't started yet, keep waiting
 
             if state == "disabled":
-                # Printer got disabled (USB disconnect etc.) — recover immediately
                 log.warning("Job %s: printer disabled at %ds", job_id, elapsed)
                 break
 
-        # 3. Timeout or disabled — job is stuck
-        log.warning("Job %s stuck after %ds, cancelling and recovering", job_id, JOB_TIMEOUT)
+        # 3. Timeout, stuck, or disabled — recover
+        log.warning("Job %s stuck after %ds, cancelling and recovering", job_id, elapsed)
 
         await asyncio.get_event_loop().run_in_executor(None, _cancel_all)
         await asyncio.sleep(2)
