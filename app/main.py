@@ -1,11 +1,15 @@
 """FastAPI application — web interface for remote printing via CUPS."""
 
 import asyncio
+import logging
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Configure logging so printer.py log messages actually show up
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 from fastapi import FastAPI, Request, UploadFile, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
