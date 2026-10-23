@@ -234,7 +234,12 @@ async def submit_and_monitor(
     sides: str = "one-sided",
     margins: str = "default",
 ):
-    """Submit a job, wait for it to complete or timeout, and recover if stuck.
+    """Submit a job, monitor it, and auto-retry once if the CAPT driver hangs.
+
+    The Canon CAPT driver has a known bug where every second print produces
+    a blank page and hangs. This function detects the hang, recovers the
+    printer, and automatically retries. The retry (being the "first print
+    after recovery") always succeeds.
 
     Returns (success: bool, message: str).
     Holds _print_lock for the entire duration to prevent overlapping jobs.
@@ -244,89 +249,88 @@ async def submit_and_monitor(
         return False, "Printer is busy with another job. Please wait and try again."
 
     async with _print_lock:
-        # 1. Submit
-        ok, job_id = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: _submit_to_cups(
-                file_path=file_path,
-                copies=copies,
-                page_range=page_range,
-                number_up=number_up,
-                orientation=orientation,
-                scaling=scaling,
-                scale_percent=scale_percent,
-                paper_size=paper_size,
-                sides=sides,
-                margins=margins,
-            ),
+        submit_kwargs = dict(
+            file_path=file_path, copies=copies, page_range=page_range,
+            number_up=number_up, orientation=orientation, scaling=scaling,
+            scale_percent=scale_percent, paper_size=paper_size,
+            sides=sides, margins=margins,
         )
 
-        if not ok:
-            return False, job_id  # job_id is the error message here
-
-        log.info("Job %s submitted, monitoring (timeout=%ds)", job_id, JOB_TIMEOUT)
-
-        # 2. Two-phase monitoring:
-        #    Phase A: Wait for the printer to start processing (leave idle state).
-        #             If it's still idle after 15s, the job may have gone through
-        #             instantly or failed to reach the printer.
-        #    Phase B: Wait for the printer to return to idle (done printing).
-        #
-        #    We check printer device status instead of the job queue because
-        #    the CAPT driver leaves ghost jobs in lpstat -o after printing.
-
-        elapsed = 0
-        saw_printing = False
-        printing_for = 0         # seconds spent in "printing" state
-        phase_a_limit = 15       # seconds to wait for printing to start
-
-        while elapsed < JOB_TIMEOUT:
-            await asyncio.sleep(JOB_POLL_INTERVAL)
-            elapsed += JOB_POLL_INTERVAL
-
-            state = await asyncio.get_event_loop().run_in_executor(
-                None, _get_printer_state,
+        # Try up to 2 times: original + 1 auto-retry after CAPT hang
+        for attempt in range(1, 3):
+            ok, job_id = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _submit_to_cups(**submit_kwargs),
             )
-            log.info("Job %s poll: state=%s elapsed=%ds printing_for=%ds",
-                     job_id, state, elapsed, printing_for)
 
-            if state == "printing":
-                saw_printing = True
-                printing_for += JOB_POLL_INTERVAL
+            if not ok:
+                return False, job_id
 
-                # CAPT silently hangs with no error log when stuck.
-                # The "printing" state = CUPS sending data over USB.
-                # Even large PDFs transfer in under 30s. If still
-                # "printing" after JOB_STUCK_PRINTING (default 45s),
-                # the driver is hung.
-                if printing_for >= JOB_STUCK_PRINTING:
-                    log.warning("Job %s stuck in printing for %ds, recovering",
-                                job_id, printing_for)
-                    break
-                continue
+            log.info("Job %s submitted (attempt %d/2), monitoring (timeout=%ds)",
+                     job_id, attempt, JOB_TIMEOUT)
 
-            if state == "idle":
-                if saw_printing:
-                    # Was printing, now idle → done
-                    log.info("Job %s completed (printer idle) after %ds", job_id, elapsed)
-                    return True, f"Print completed ({job_id})"
-                elif elapsed >= phase_a_limit:
-                    log.info("Job %s: printer stayed idle for %ds, assuming completed", job_id, elapsed)
-                    return True, f"Print completed ({job_id})"
+            result = await _monitor_job(job_id)
 
-            if state == "disabled":
-                log.warning("Job %s: printer disabled at %ds", job_id, elapsed)
-                break
+            if result == "completed":
+                return True, f"Print completed ({job_id})"
 
-        # 3. Timeout, stuck, or disabled — recover
-        log.warning("Job %s stuck after %ds, recovering", job_id, elapsed)
+            # Job stuck — recover and retry
+            log.warning("Job %s stuck, recovering printer (attempt %d/2)", job_id, attempt)
+            await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
+            await asyncio.sleep(3)  # brief settle after recovery
 
-        await asyncio.get_event_loop().run_in_executor(None, _recover_printer)
+            if attempt == 1:
+                log.info("Auto-retrying print after CAPT driver recovery")
 
         return False, (
-            f"Print job {job_id} appeared stuck and was cancelled after {elapsed}s. "
-            f"Printer has been reset and is ready for the next job."
+            f"Print failed after 2 attempts. The printer has been reset "
+            f"and is ready — please try again."
         )
+
+
+async def _monitor_job(job_id):
+    """Monitor a submitted job until it completes or is detected as stuck.
+
+    Returns: 'completed' or 'stuck'
+    """
+    elapsed = 0
+    saw_printing = False
+    printing_for = 0
+    phase_a_limit = 15
+
+    while elapsed < JOB_TIMEOUT:
+        await asyncio.sleep(JOB_POLL_INTERVAL)
+        elapsed += JOB_POLL_INTERVAL
+
+        state = await asyncio.get_event_loop().run_in_executor(
+            None, _get_printer_state,
+        )
+        log.info("Job %s poll: state=%s elapsed=%ds printing_for=%ds",
+                 job_id, state, elapsed, printing_for)
+
+        if state == "printing":
+            saw_printing = True
+            printing_for += JOB_POLL_INTERVAL
+
+            if printing_for >= JOB_STUCK_PRINTING:
+                log.warning("Job %s stuck in printing for %ds", job_id, printing_for)
+                return "stuck"
+            continue
+
+        if state == "idle":
+            if saw_printing:
+                log.info("Job %s completed (printer idle) after %ds", job_id, elapsed)
+                return "completed"
+            elif elapsed >= phase_a_limit:
+                log.info("Job %s: printer stayed idle for %ds, assuming completed",
+                         job_id, elapsed)
+                return "completed"
+
+        if state == "disabled":
+            log.warning("Job %s: printer disabled at %ds", job_id, elapsed)
+            return "stuck"
+
+    log.warning("Job %s timed out after %ds", job_id, elapsed)
+    return "stuck"
 
 
 # ---------------------------------------------------------------------------
